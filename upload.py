@@ -17,12 +17,13 @@ from watchdog.events import PatternMatchingEventHandler
 
 class UpLoad(PatternMatchingEventHandler):
     def set_params(self, access_key_id, access_key_secret, bucket_name,
-                   endpoint):
+                   endpoint, root):
         # 确认上面的参数都填写正确了
         for param in (access_key_id, access_key_secret, bucket_name, endpoint):
             assert '<' not in param, '请设置参数：' + param
         # 创建Bucket对象，所有Object相关的接口都可以通过Bucket对象来进行
         self.bucket = oss2.Bucket(oss2.Auth(access_key_id, access_key_secret), endpoint, bucket_name)
+        self.root = root
       
 
     def on_created(self, event):
@@ -30,21 +31,24 @@ class UpLoad(PatternMatchingEventHandler):
 
     def process(self, event):
         time.sleep(1)
-        self.upload_resumable(event.src_path)
+        src = event.src_path
+        dst = self.root + "/" + os.path.basename(src)
+        self.upload_resumable(src, dst)
 
-    def upload_resumable(self, filepath):
-        print "upload resumable"
-        oss2.resumable_upload(self.bucket, 'remote-multipart.txt', filepath, 
-            multipart_threshold=100 * 1024)
+    def upload_resumable(self, src, dst):
+        print "upload resumable:" + str(src)
+        print "to:" + str(dst)
+        oss2.resumable_upload(self.bucket, dst, src, multipart_threshold = 100 * 1024)
+        time.sleep(1)
         print "upload resumable ok!"
     
-    def upload_mutipart(self, filepath):
+    def upload_mutipart(self, src, dst):
         print "upload mutipart"
-        total_size = os.path.getsize(filepath)
+        total_size = os.path.getsize(src)
         part_size = oss2.determine_part_size(total_size, preferred_size=128 * 1024)
 
         # 初始化分片上传，得到Upload ID。接下来的接口都要用到这个Upload ID。
-        key = 'remote-multipart2.txt'
+        key = dst
         upload_id = self.bucket.init_multipart_upload(key).upload_id
 
         # 逐个上传分片
@@ -70,11 +74,13 @@ class UpLoad(PatternMatchingEventHandler):
 if __name__ == '__main__':
     args = sys.argv[1:]
     if len(args) < 2:
-        print "Usage: python upload.py root jsonfile"
+        print "Usage: python upload.py jsonfile srcroot dstroot"
         
     else:
-        root = args[0]
-        jsonfile = args[1]
+        jsonfile = args[0]
+        srcroot = args[1]
+        dstroot = args[2]
+
         import json
         if os.path.exists(jsonfile):
             params = json.load(file(jsonfile))["caiyuangang"][0]["parameter"]
@@ -82,12 +88,13 @@ if __name__ == '__main__':
             access_key_secret = params["accessKeySecret"]
             bucket_name = params["bucket"]
             endpoint = params["connection"][0]["endpoint"]
-            print access_key_id, access_key_secret, bucket_name, endpoint, root
+            print access_key_id, access_key_secret, bucket_name, endpoint, srcroot
             observer = Observer()
             upload = UpLoad()
             upload.set_params(access_key_id, access_key_secret, bucket_name, 
-                              endpoint)
-            observer.schedule(upload, path = root)
+                              endpoint, dstroot)
+
+            observer.schedule(upload, path = srcroot)
             
             observer.start()
             observer.join()
