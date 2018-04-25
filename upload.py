@@ -11,37 +11,39 @@ import os
 import oss2
 import sys
 import time  
-from watchdog.observers import Observer  
+
 from watchdog.events import PatternMatchingEventHandler 
 
 
-class UpLoad(PatternMatchingEventHandler):
-    def set_params(self, access_key_id, access_key_secret, bucket_name,
-                   endpoint, root):
+class UpLoadEngine():
+    def __init__(self, access_key_id, access_key_secret, bucket_name,
+                   endpoint):
         # 确认上面的参数都填写正确了
         for param in (access_key_id, access_key_secret, bucket_name, endpoint):
             assert '<' not in param, '请设置参数：' + param
         # 创建Bucket对象，所有Object相关的接口都可以通过Bucket对象来进行
         self.bucket = oss2.Bucket(oss2.Auth(access_key_id, access_key_secret), endpoint, bucket_name)
-        self.root = root
       
-
-    def on_created(self, event):
-		self.process(event)
-
-    def process(self, event):
+    def upload_resumable(self, local, remote):
+        oss2.resumable_upload(self.bucket, remote, local, multipart_threshold = 100 * 1024)
         time.sleep(1)
-        src = event.src_path
-        dst = self.root + "/" + os.path.basename(src)
-        self.upload_resumable(src, dst)
-
-    def upload_resumable(self, src, dst):
-        print "upload resumable:" + str(src)
-        print "to:" + str(dst)
-        oss2.resumable_upload(self.bucket, dst, src, multipart_threshold = 100 * 1024)
-        time.sleep(1)
-        print "upload resumable ok!"
     
+    def upload_append(self, local, remote):
+        with open(local, 'rb') as f:
+            data_end = os.path.getsize(local) 
+            data_start = 0
+            exist = self.bucket.object_exists(remote)
+
+            if exist:
+                print('object exist ')
+                result = self.bucket.head_object(remote)
+                data_start = result.content_length
+
+            print(data_start, data_end)   
+            result = self.bucket.append_object(remote,  data_start,  f.read(data_end - data_start) )
+        f.close()
+            
+
     def upload_mutipart(self, src, dst):
         print "upload mutipart"
         total_size = os.path.getsize(src)
@@ -70,36 +72,3 @@ class UpLoad(PatternMatchingEventHandler):
             self.bucket.complete_multipart_upload(key, upload_id, parts)
         print "upload mutipart ok!"
 
-
-if __name__ == '__main__':
-    args = sys.argv[1:]
-    if len(args) < 2:
-        print "Usage: python upload.py jsonfile srcroot dstroot"
-        
-    else:
-        jsonfile = args[0]
-        srcroot = args[1]
-        dstroot = args[2]
-
-        import json
-        if os.path.exists(jsonfile):
-            params = json.load(file(jsonfile))["caiyuangang"][0]["parameter"]
-            access_key_id = params["accessKeyId"]
-            access_key_secret = params["accessKeySecret"]
-            bucket_name = params["bucket"]
-            endpoint = params["connection"][0]["endpoint"]
-            print access_key_id, access_key_secret, bucket_name, endpoint, srcroot
-            observer = Observer()
-            upload = UpLoad()
-            upload.set_params(access_key_id, access_key_secret, bucket_name, 
-                              endpoint, dstroot)
-
-            observer.schedule(upload, path = srcroot)
-            
-            observer.start()
-            observer.join()
-            try:
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                observer.stop()
